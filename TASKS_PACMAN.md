@@ -1,91 +1,49 @@
 # Pac-Man project — TASKS
 
 Reviewed: 2026-11-18, code on **`origin/main` @ `84f203c`** ("fix: lives and main checker also ghosts glitch").
-All `file:line` below = that commit (line numbers almost same as `9f69bc7`).
+All `file:line` below = that commit. Fixed items are removed from this file (see DONE log at the end).
 
-### Update check `84f203c` (2026-11-18)
-| Item | Result |
-|------|--------|
-| P1 ghost into walls | **FIXED** (swap cells in `afraid_of`). Line `ghost.py:168` now 82 chars → flake8 E501 later |
-| P4 WINNER `return` | **FIXED** |
-| P5 `reset_game()` before `load_level()` | **FIXED**. Still open: Start click calls `load_level()` twice (`game.py:120-123`), pacgum check outside PLAYING (`game.py:93-94`) |
-| P3 timer typo | **NOT FIXED**: `game.py:256` still `self.time_left = ...` (only `float()` added). Must be `GameState.time_left` |
-| P2 lives | **CHANGED, new bug** → see P2 |
-| P8 main checker | **NOT DONE**: `__main__.py` only got a final newline. No try/except, no argc check |
-| `highscores.json` | more test names committed (P7.4) |
-| Ghost chase (`next_direction`, `ghost.py:82-129`) | untouched → BFS plan (section B) still applies as written |
-
-> **Before you start your try:** local branch `zak_features` (@ `f1bf2b3`) is **3 commits behind `origin/main`**.
-> `origin/main` moved `setting.json` → `src/setting.json`, deleted the `mazegenerator/` folder and uses the wheel
-> `mazegenerator-2.1.0-py3-none-any.whl` instead.
-> 1. `git fetch && git merge origin/main` (or rebase), on `zak_features`.
-> 2. `uv sync` (installs the wheel; without it `import mazegenerator` fails once the folder is gone).
-> 3. Run: `make run` (uses `src/setting.json`).
+> **Before you start your try:** local `zak_features` (@ `f1bf2b3`) is **4 commits behind `origin/main`**.
+> `origin/main` moved `setting.json` → `src/setting.json` and replaced the `mazegenerator/` folder by the wheel.
+> 1. `git fetch && git merge origin/main` (on `zak_features`).
+> 2. `uv sync` (installs the wheel; without it `import mazegenerator` fails).
+> 3. `make run` (uses `src/setting.json`).
 
 ---
 
 ## PROGRESS
 
-| # | Task | Status | Notes |
-|---|------|--------|-------|
-| 2 | Pacgums: placement, eating, score, HUD | DONE | Moved to `GameState.set_pacgums` + `Pacman.eat_pacgum` |
+| # | Task | Status | Open |
+|---|------|--------|------|
+| 2 | Pacgums: placement, eating, score, HUD | DONE | |
 | 3 | Ghost collision, lives, respawn | DONE | |
-| 4 | Afraid mode, eat ghost, ghost respawn | DONE | P1 wall glitch fixed in `84f203c` |
-| 5 | Levels, timer, win/lose | DONE, **2 bugs** | Lives not reset on new game (P2), timer typo kills all lives (P3). P4 fixed |
-| 6 | State machine (Menu → Game → End → Name → Menu) | PARTIAL | Works with strings in `MazeEnv.state`. Start resets game. No Enum, no PAUSED, double `load_level` (P5) |
-| 8 | Highscores JSON (top 10, name input, menu view) | PARTIAL | Save + name input work. Not robust to bad file, list never refreshed, ignores config filename (P7) |
-| 9 | Winner / Loser / Instructions screens | PARTIAL | Winner + Loser done. Instructions = placeholder text (P9) |
-| 7 | Pause menu (Resume / Main menu) | TODO | ESC today = quit game to menu (P6) |
-| 10 | Cheat mode | TODO | `GameState.cheat_mode` flag exists, never turned on (section C) |
-| 1 | Config loader | PARTIAL | `#` / `//` comments OK. Unknown keys crash, bad values crash, missing file crash (P10) |
-| 11 | Entry point, Makefile, packaging, itch.io | PARTIAL | Wheel install DONE (old B9 solved), `make run` OK. No `pac-man.py`, `debug` uses `pudb`, `clean` incomplete |
-| 12 | Lint: flake8 + mypy strict | TODO (at end) | |
-| 14 | README + `docs/project_management/` | TODO | README is empty |
+| 4 | Afraid mode, eat ghost, ghost respawn | DONE | |
+| 5 | Levels, timer, win/lose | 2 bugs | P2 lives on new game, P3 timer typo |
+| — | Ghost chase quality | TODO | Section B (BFS) |
+| 6 | State machine (Menu → Game → End → Name → Menu) | PARTIAL | P5 (double load, pacgum check), Enum, PAUSED |
+| 7 | Pause menu (Resume / Main menu) | TODO | P6 |
+| 10 | Cheat mode | TODO | Section C |
+| 8 | Highscores JSON | PARTIAL | P7 (robust load, refresh, config filename) |
+| 9 | Winner / Loser / Instructions screens | PARTIAL | P9 (instructions text) |
+| 1 | Config loader | PARTIAL | P10 |
+| — | No traceback / argc check | TODO | P8 |
+| 11 | Entry point, Makefile, packaging, itch.io | PARTIAL | No `pac-man.py`, `debug` uses `pudb`, `clean` incomplete |
+| 12 | Lint: flake8 + mypy strict | TODO (at end) | + `ghost.py:168` 82 chars (E501) |
+| 14 | README + `docs/project_management/` | TODO | README empty |
 
 Order of remaining work:
-**P3 + P2 → P5 rest → BFS chase (section B) → 7 (pause) → 10 (cheat) → 8 robustness → 9 instructions → 1 (config) → P8 (main) → 11 → cleanup → 12 → 14**
+**P3 + P2 → P5 → BFS chase (section B) → P6 pause → C cheat → P7 → P9 → P10 → P8 → 11 → P12 cleanup → 12 lint → 14**
 
 ---
 
 ## PROBLEMS — what, where, fix
 
-### P1. Ghost goes into walls after super gum (CONFIRMED by headless test)
+### P2. Lives not reset on new game
 
-**Where:** `src/graphic/characters/ghost.py:157-169` `afraid_of()`.
+**Where:** `src/logic/game_state.py:22-23` `setup()`: `if cls.lives == 0: cls.lives = config.lives`;
+`game_state.py:32` `reset_game()`: lives line commented out (`MazeEnv.config` is `None` on the very first call).
 
-**Why it happens:**
-```python
-if self.current_cell != self.target_cell:
-    self.target_cell = self.current_cell          # ghost is mid-corridor, e.g. y = 3.4
-    self.direction = self.get_opposite_direction(self.direction)
-```
-Ghost is halfway between 2 cells (`y = 3.4`). Code says "target = current cell", so next frame
-`Character.move` thinks ghost is **at** a cell center and picks a new direction (e.g. LEFT) from `next_direction()`.
-Now it moves LEFT with `y = 3.4` → drawn between 2 rows → crosses walls. When it arrives, `align_with_target()`
-snaps `y` to 3 → visible jump. The reversed `direction` is also lost (`next_direction()` overwrites it).
-
-Test (seed 42, 20x20): 3/3 tries mid-move → ghost moves LEFT at `y = 0.3 / 0.35 / 0.4` along row 0.
-
-**Fix (tested: 0 glitch cases):** reverse properly = swap the 2 cells, ghost goes back to the cell it came from
-(that corridor is always open):
-```python
-if self.current_cell != self.target_cell:
-    self.current_cell, self.target_cell = self.target_cell, self.current_cell
-    self.direction = self.get_opposite_direction(self.direction)
-```
-Bonus: works for 2 super gums in a row too.
-
-Optional same idea for Pacman (feels better): in `Character.move`, if `new_direction` is the opposite of
-`direction` while moving → swap cells + flip direction, so Pacman can turn back instantly mid-corridor.
-
-### P2. Lives — new version still wrong
-
-Old bug (lives reset every level) is gone. New code (`84f203c`):
-- `game_state.py:22-23` `setup()`: `if cls.lives == 0: cls.lives = config.lives`
-- `game_state.py:32` `reset_game()`: lives line commented out (`MazeEnv.config` is `None` on the very first call,
-  that's why the assert was commented too).
-
-**New bug:** lives only refill when they are exactly 0. Press ESC mid-game with 1 life → Start → new game with **1 life**.
+**Bug:** lives only refill when exactly 0. ESC mid-game with 1 life → Start → new game with **1 life**.
 Win the game with 2 lives → next game starts with **2 lives**.
 
 **Fix:** give the value to `reset_game`, keep `setup` away from lives:
@@ -106,8 +64,8 @@ GameState.reset_game(self.config.lives)
 
 ### P3. Timer at 0 → all lives lost in 3 frames
 
-**Where:** `src/logic/game.py:256` `self.time_left = (self.config.level_max_time)`.
-Typo: should be `GameState.time_left`. `GameState.time_left` stays ≤ 0 → `lose_life()` every frame.
+**Where:** `src/logic/game.py:256` `self.time_left = float(self.config.level_max_time)`.
+Typo: `self.time_left` instead of `GameState.time_left` → `GameState.time_left` stays ≤ 0 → `lose_life()` every frame.
 
 **Fix:**
 ```python
@@ -115,30 +73,14 @@ GameState.time_left = float(self.config.level_max_time)
 ```
 Also `game_state.py:16` `time_left: int` → `float`.
 
-### P4. After last level, game keeps building a level
-
-**Where:** `src/logic/game.py:267-271` — `# return` commented after `MazeEnv.state = 'WINNER'`.
-Result: new maze generated + `load_level()` after winning (useless, and with P2 resets lives).
-
-**Fix:** un-comment `return`.
-
-### P5. Start game loads level twice / level check runs in every state
+### P5. Start loads level twice / level check runs in every state
 
 **Where:**
-- `game.py:120-123` click "Start": `start_new_game()` (already calls `load_level()`) then `self.load_level()` again.
-- `game.py:181-186` `start_new_game()`: `load_level()` **before** `GameState.reset_game()`.
+- `game.py:120-123` click "Start": `start_new_game()` (already calls `load_level()`) then `self.load_level()` again
+  → pacgums placed twice, wasted work.
 - `game.py:93-94` `if not GameState.pacgums: self.level_win()` runs in **every** state (menu, screens...).
 
-**Fix:**
-```python
-def start_new_game(self) -> None:
-    GameState.reset_game()
-    if not self.new_maze(self.config.seed):
-        raise RuntimeError("Maze generator failed to load initial maze")
-    self.dt = 0
-    self.load_level()
-```
-Click Start → `self.start_new_game(); MazeEnv.state = "PLAYING"` (remove extra `load_level()`).
+**Fix:** click Start → `self.start_new_game(); MazeEnv.state = "PLAYING"` (delete extra `load_level()`).
 Move the pacgum check inside the `"PLAYING"` branch, right after `self.pacman.eat_pacgum()`.
 
 Later (task 6 clean): `class State(Enum)` with MENU, PLAYING, PAUSED, WINNER, LOSER, HIGHSCORES, INSTRUCTIONS.
@@ -233,7 +175,7 @@ Also unused copies of score/lives/level (l.10-13).
 
 | # | Where | Problem | Fix |
 |---|-------|---------|-----|
-| a | `game.py:52` | `print(f"State: ...")` every frame (60 lines/s) | Delete. Also debug prints `input_widget.py:35-39`, `highscores.py:14`, `game.py:239` |
+| a | several | Debug prints left | Delete: `input_widget.py:35-39`, `highscores.py:14`, `game.py:239`, commented `game.py:52` |
 | b | `game.py:28` | `minimum_size = (1500, 1000)` > many screens / reviewer VM | `(800, 600)` |
 | c | `game.py:104-114` | Resize only re-layouts HUD + main menu. Winner/loser/highscores/instructions keep old font size; their surfaces are the old `window.get_surface()` | On resize: `self.screen = ...` and give every screen the new surface + `calculate_layout()` |
 | d | `game.py:147-150, 240-241, 269-270` | Magic indexes `elements[4]`, `elements[2]` | Keep refs: `self.input = InputWidget()`, `self.score_text = ...` in screens |
@@ -246,6 +188,7 @@ Also unused copies of score/lives/level (l.10-13).
 | k | `pacman.py:6` | `config` param unused | remove or use for speed |
 | l | `src/setting.json` | Test values committed: `pacgum: 1`, `levels: 3` | `pacgum: 42`, `levels: 10`; add `afraid_time`, `ghost_pwn_time`; rename `config.json` at root (subject usage) |
 | m | `game.py:20-48` | `Game.__init__` calls `start_new_game()` and `run()` | `run()` out (P8) |
+| n | `character.py:55-76` | Pacman can only turn back at a cell center (feels laggy) | Optional: if `new_direction` is opposite of `direction` while moving → swap `current_cell`/`target_cell` + flip direction (same trick as ghost afraid fix) |
 
 ### P12. Dead files / cleanup
 
@@ -417,3 +360,17 @@ To add: screens/pause.py, pac-man.py, config.json (root), docs/project_managemen
 - [ ] Cheat keys documented in Instructions + README
 - [ ] `make lint` clean (flake8 + mypy strict)
 - [ ] README + docs/project_management + itch.io link
+
+---
+
+## DONE log (removed from problems list)
+
+| Date | Commit | What |
+|------|--------|------|
+| 2026-11-18 | `84f203c` | Ghost went into walls after super gum → `afraid_of` swaps `current_cell`/`target_cell` |
+| 2026-11-18 | `84f203c` | WINNER: `return` restored in `level_win`, no extra level built |
+| 2026-11-18 | `84f203c` | `start_new_game`: `reset_game()` now before `load_level()` |
+| 2026-11-18 | `84f203c` | Lives no longer reset every level (but see P2) |
+| 2026-11-18 | `84f203c` | `print("State: ...")` every frame removed |
+| ≤ `9f69bc7` | | Level 1 = `config.seed`, `level = 1`, maze `None` → RuntimeError, `dt` reset per level, seed range never crashes |
+| ≤ `9f69bc7` | | Mazegenerator installed as wheel (folder removed), Winner/Loser screens + name input + top-10 save, Start/Highscores/Instructions/Exit buttons |
