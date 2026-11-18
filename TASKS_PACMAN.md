@@ -1,7 +1,19 @@
 # Pac-Man project — TASKS
 
-Reviewed: 2026-11-18, code on **`origin/main` @ `9f69bc7`** ("Abdo: Added scoring saving and highscores screen...").
-All `file:line` below = that commit.
+Reviewed: 2026-11-18, code on **`origin/main` @ `84f203c`** ("fix: lives and main checker also ghosts glitch").
+All `file:line` below = that commit (line numbers almost same as `9f69bc7`).
+
+### Update check `84f203c` (2026-11-18)
+| Item | Result |
+|------|--------|
+| P1 ghost into walls | **FIXED** (swap cells in `afraid_of`). Line `ghost.py:168` now 82 chars → flake8 E501 later |
+| P4 WINNER `return` | **FIXED** |
+| P5 `reset_game()` before `load_level()` | **FIXED**. Still open: Start click calls `load_level()` twice (`game.py:120-123`), pacgum check outside PLAYING (`game.py:93-94`) |
+| P3 timer typo | **NOT FIXED**: `game.py:256` still `self.time_left = ...` (only `float()` added). Must be `GameState.time_left` |
+| P2 lives | **CHANGED, new bug** → see P2 |
+| P8 main checker | **NOT DONE**: `__main__.py` only got a final newline. No try/except, no argc check |
+| `highscores.json` | more test names committed (P7.4) |
+| Ghost chase (`next_direction`, `ghost.py:82-129`) | untouched → BFS plan (section B) still applies as written |
 
 > **Before you start your try:** local branch `zak_features` (@ `f1bf2b3`) is **3 commits behind `origin/main`**.
 > `origin/main` moved `setting.json` → `src/setting.json`, deleted the `mazegenerator/` folder and uses the wheel
@@ -18,8 +30,8 @@ All `file:line` below = that commit.
 |---|------|--------|-------|
 | 2 | Pacgums: placement, eating, score, HUD | DONE | Moved to `GameState.set_pacgums` + `Pacman.eat_pacgum` |
 | 3 | Ghost collision, lives, respawn | DONE | |
-| 4 | Afraid mode, eat ghost, ghost respawn | DONE, **1 bug** | Ghost goes into walls when super gum eaten → P1 |
-| 5 | Levels, timer, win/lose | DONE, **3 bugs** | Lives reset every level (P2), timer typo kills all lives (P3), WINNER missing `return` (P4) |
+| 4 | Afraid mode, eat ghost, ghost respawn | DONE | P1 wall glitch fixed in `84f203c` |
+| 5 | Levels, timer, win/lose | DONE, **2 bugs** | Lives not reset on new game (P2), timer typo kills all lives (P3). P4 fixed |
 | 6 | State machine (Menu → Game → End → Name → Menu) | PARTIAL | Works with strings in `MazeEnv.state`. Start resets game. No Enum, no PAUSED, double `load_level` (P5) |
 | 8 | Highscores JSON (top 10, name input, menu view) | PARTIAL | Save + name input work. Not robust to bad file, list never refreshed, ignores config filename (P7) |
 | 9 | Winner / Loser / Instructions screens | PARTIAL | Winner + Loser done. Instructions = placeholder text (P9) |
@@ -31,7 +43,7 @@ All `file:line` below = that commit.
 | 14 | README + `docs/project_management/` | TODO | README is empty |
 
 Order of remaining work:
-**P1 → P2/P3/P4 → P5 → 7 (pause) → 10 (cheat) → 8 robustness → 9 instructions → 1 (config) → P8 (main) → 11 → cleanup → 12 → 14**
+**P3 + P2 → P5 rest → BFS chase (section B) → 7 (pause) → 10 (cheat) → 8 robustness → 9 instructions → 1 (config) → P8 (main) → 11 → cleanup → 12 → 14**
 
 ---
 
@@ -66,12 +78,31 @@ Bonus: works for 2 super gums in a row too.
 Optional same idea for Pacman (feels better): in `Character.move`, if `new_direction` is the opposite of
 `direction` while moving → swap cells + flip direction, so Pacman can turn back instantly mid-corridor.
 
-### P2. Lives reset to max every new level
+### P2. Lives — new version still wrong
 
-**Where:** `src/logic/game_state.py:22` in `setup()`: `cls.lives = MazeEnv.config.lives`.
-`setup()` is called by `load_level()` → every level. Subject VI.7: keep lives between levels.
+Old bug (lives reset every level) is gone. New code (`84f203c`):
+- `game_state.py:22-23` `setup()`: `if cls.lives == 0: cls.lives = config.lives`
+- `game_state.py:32` `reset_game()`: lives line commented out (`MazeEnv.config` is `None` on the very first call,
+  that's why the assert was commented too).
 
-**Fix:** delete line 22. Lives are only set in `reset_game()` (already there, l.31).
+**New bug:** lives only refill when they are exactly 0. Press ESC mid-game with 1 life → Start → new game with **1 life**.
+Win the game with 2 lives → next game starts with **2 lives**.
+
+**Fix:** give the value to `reset_game`, keep `setup` away from lives:
+```python
+# game_state.py
+@classmethod
+def reset_game(cls, lives: int) -> None:
+    cls.score = 0
+    cls.lives = lives
+    cls.level = 1
+    cls.cheat_mode = False
+
+# setup(): delete the 2 lives lines
+
+# game.py start_new_game()
+GameState.reset_game(self.config.lives)
+```
 
 ### P3. Timer at 0 → all lives lost in 3 frames
 
@@ -248,6 +279,9 @@ Every time a ghost reaches a cell center (`get_target_cell` → `next_direction`
 - Straight-line distance ignores walls. Ghost goes toward Pacman "as the crow flies" → in dead ends / U-shapes
   it loops around a block and never reaches Pacman. Non-perfect maze helps but not always.
 - 4 ghosts often follow the same path (all greedy on nearly same cell).
+- **Measured (2026-11-18, headless, 30 mazes 20x20 seeds 1-30, Pacman standing still at center, chase only):**
+  greedy Blinky reached Pacman in **10/30** mazes within 2 min (avg 15.0 s). Other 20: loops forever.
+  Same test with BFS (section B): **30/30**, avg 8.8 s, max 13.8 s.
 - Modes timed with `get_ticks()` → keep running in pause (P6).
 
 ## B. Better chase: BFS distance (recommended, ~25 lines)
