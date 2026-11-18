@@ -150,13 +150,137 @@ except Exception as e:
 ```
 And move `self.run()` out of `Game.__init__` (`game.py:48`) → `game.run()` inside the try.
 
-### P9. Instructions screen is placeholder
+### P9. Instructions screen (placeholder text + broken layout)
 
-**Where:** `src/graphic/screens/instructions.py:15-17` ("Hellooooo", "Its meeeee").
-Also unused copies of score/lives/level (l.10-13).
+**Where:** `src/graphic/screens/instructions.py` + `src/graphic/menus/menu_widget.py` + `src/logic/game.py`.
 
-**Fix:** real text: controls (arrows/WASD, ESC pause), rules (gum +10, super +50, ghost +200, 3 lives, timer),
-**cheat keys list** (section C). Add a "Back" line (ESC → menu).
+**Problems now:**
+1. Text = "Hellooooo", "Its meeeee", "what do you want?" (l.15-17). Subject VI.8: must show **controls and rules**.
+2. Uses layout `"HUD"` (l.8) → font = `width * 0.10` of the **whole window** (~150 px) → long lines go off screen.
+3. l.10-13 copies score/lives/level → unused, delete.
+4. No way back except ESC, and the player isn't told.
+5. Not re-laid out on window resize (`game.py:104-114` only HUD + main menu).
+
+**Target look** (dark bg, yellow titles, white text, ghost names in their colors, button at bottom):
+```
+                 HOW TO PLAY
+
+                  CONTROLS
+          Arrows / WASD   move Pac-Man
+          ESC             pause / back
+
+                   RULES
+          Pacgum           +10 pts
+          Super pacgum     +50 pts, ghosts turn blue (7 s)
+          Blue ghost       +200 pts, comes back after 5 s
+          Touch a ghost    lose 1 life (3 lives)
+          Eat all pacgums  next level  (10 levels)
+          Timer 90 s       time out = lose 1 life
+
+                  GHOSTS
+     Blinky chases you      Pinky cuts you off
+     Inky follows close     Clyde is shy when near
+
+            CHEAT MODE (press C)
+     I invincible  N skip level  F freeze ghosts
+     L +1 life     V speed x2    T +30 s
+
+                  [ Back ]
+```
+Numbers come from **config** (reviewer will change them at defense → screen must follow).
+
+**Step 1 — layout for this screen** (`menu_widget.py`, in `calculate_layout`, add a branch):
+```python
+elif self.menu_name == 'INSTRUCTIONS':
+    menu_width, menu_height = self.surface.get_size()
+    # ~26 lines must fit: limit by height too, not only width
+    dynamic_font_size = max(14, min(int(menu_width * 0.022),
+                                    int(menu_height * 0.032)))
+    self.gap = int(dynamic_font_size * 0.15)
+```
+
+**Step 2 — the screen** (`src/graphic/screens/instructions.py`, replace all):
+```python
+from ..menus.menu_widget import MenuWidget
+from ..widgets.text_widget import TextWidget
+from ..widgets.button_widget import ButtonWidget
+
+YELLOW = (255, 220, 0)
+WHITE = (230, 230, 230)
+GREY = (150, 150, 150)
+RED = (255, 0, 0)
+PINK = (255, 184, 255)
+CYAN = (70, 191, 238)
+ORANGE = (240, 131, 0)
+
+
+class InstructionScreen(MenuWidget):
+    """Controls, rules, ghosts and cheat keys. Values read from config."""
+
+    def __init__(self, surface, config) -> None:
+        super().__init__(surface, "INSTRUCTIONS")
+        self.bg_color = (0, 0, 0)
+        self.back_button = ButtonWidget("Back")
+        c = config
+        self.elements = [
+            TextWidget("HOW TO PLAY", YELLOW),
+            TextWidget(""),
+            TextWidget("CONTROLS", YELLOW),
+            TextWidget("Arrows / WASD : move Pac-Man", WHITE),
+            TextWidget("ESC : pause / back", WHITE),
+            TextWidget(""),
+            TextWidget("RULES", YELLOW),
+            TextWidget(f"Pacgum : +{c.points_per_pacgum} pts", WHITE),
+            TextWidget(f"Super pacgum : +{c.points_per_super_pacgum} pts,"
+                       f" ghosts turn blue for {c.afraid_time} s", WHITE),
+            TextWidget(f"Blue ghost : +{c.points_per_ghost} pts,"
+                       f" back after {c.ghost_pwn_time} s", WHITE),
+            TextWidget(f"Touch a ghost : lose 1 life"
+                       f" (you have {c.lives})", WHITE),
+            TextWidget(f"Eat all pacgums : next level"
+                       f" ({c.levels} levels)", WHITE),
+            TextWidget(f"Timer {c.level_max_time} s :"
+                       f" time out = lose 1 life", WHITE),
+            TextWidget(""),
+            TextWidget("GHOSTS", YELLOW),
+            TextWidget("Blinky chases you", RED),
+            TextWidget("Pinky cuts you off", PINK),
+            TextWidget("Inky follows close behind", CYAN),
+            TextWidget("Clyde runs home when near", ORANGE),
+            TextWidget(""),
+            TextWidget("CHEAT MODE (press C)", YELLOW),
+            TextWidget("I invincible   N skip level   F freeze ghosts",
+                       GREY),
+            TextWidget("L +1 life   V speed x2   T +30 s", GREY),
+            TextWidget(""),
+            self.back_button,
+        ]
+        self.calculate_layout()
+```
+Note: `TextWidget("")` = empty line spacer (checked: pygame-ce renders `""` as 0 x font-height surface, layout works).
+Keep the cheat lines in sync with section C (only list keys that really exist).
+
+**Step 3 — wire it** (`game.py`):
+1. Build: `InstructionScreen(self.instructions_surface, self.config)`.
+2. Click in INSTRUCTIONS state (in `check_events`, MOUSEBUTTONDOWN):
+   ```python
+   elif MazeEnv.state == "INSTRUCTIONS":
+       if self.instructions_screen.check_clicks(mouse_pos) == "Back":
+           MazeEnv.state = "MENU"
+   ```
+3. Resize: add `self.instructions_screen.surface = self.window.get_surface()` +
+   `self.instructions_screen.calculate_layout()` (same for winner/loser/highscores, P11-c).
+
+**Same idea for the other screens (cheap UI wins):**
+- Main menu: add title "PAC-MAN" in yellow above the buttons (`TextWidget("PAC-MAN", YELLOW)` first element)
+  + small grey line at bottom "ESC = back / pause".
+- Highscores: title "TOP 10" yellow, rank 1 in yellow, others white, "No scores yet" if empty, "Back" button.
+- Winner / Loser: black bg like the menu, score line yellow, under the input: "Type your name + Enter"
+  (grey) so the player knows what to do (P11-e).
+- One shared colors file `src/graphic/colors.py` (YELLOW, WHITE, GREY, ghost colors) → reuse in ghost.py too.
+
+**Done when:** Instructions readable at 800x600 and full screen, numbers change when config changes,
+Back button + ESC return to menu, resize keeps it fitting.
 
 ### P10. Config loader crashes on reviewer edits (task 1, subject V.3)
 
