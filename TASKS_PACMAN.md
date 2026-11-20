@@ -1,13 +1,8 @@
 # Pac-Man project — TASKS
 
-Reviewed: 2026-11-18, code on **`origin/main` @ `84f203c`** ("fix: lives and main checker also ghosts glitch").
-All `file:line` below = that commit. Fixed items are removed from this file (see DONE log at the end).
-
-> **Before you start your try:** local `zak_features` (@ `f1bf2b3`) is **4 commits behind `origin/main`**.
-> `origin/main` moved `setting.json` → `src/setting.json` and replaced the `mazegenerator/` folder by the wheel.
-> 1. `git fetch && git merge origin/main` (on `zak_features`).
-> 2. `uv sync` (installs the wheel; without it `import mazegenerator` fails).
-> 3. `make run` (uses `src/setting.json`).
+Reviewed: 2026-11-20, code on **`main` @ `425d435`** ("Merge pull request #3 … pause_menu").
+All `file:line` below = that commit. Every bug marked **(tested)** was reproduced headless
+(SDL dummy driver, fake clock), not only read. Fixed items are removed from this file (see DONE log at the end).
 
 ---
 
@@ -16,37 +11,99 @@ All `file:line` below = that commit. Fixed items are removed from this file (see
 | # | Task | Status | Open |
 |---|------|--------|------|
 | 2 | Pacgums: placement, eating, score, HUD | DONE | |
-| 3 | Ghost collision, lives, respawn | DONE | |
-| 4 | Afraid mode, eat ghost, ghost respawn | DONE | |
-| 5 | Levels, timer, win/lose | 2 bugs | P2 lives on new game, P3 timer typo |
-| — | Ghost chase quality | TODO | Section B (BFS) |
-| 6 | State machine (Menu → Game → End → Name → Menu) | PARTIAL | P5 (double load, pacgum check), Enum, PAUSED |
-| 7 | Pause menu (Resume / Main menu) | TODO | P6 |
+| 3 | Ghost collision, lives, respawn | DONE | spawn kill (E3) |
+| 4 | Afraid mode, eat ghost, ghost respawn | DONE | timers run during pause (P6) |
+| 5 | Levels, timer, win/lose | 3 bugs | P2 lives, P3 timer typo, P4 `return` removed again |
+| 6 | State machine (Menu → Game → End → Name → Menu) | PARTIAL | P1 keys dead in MENU/PAUSE, P5 double load + pacgum check, Enum |
+| 7 | Pause menu (Resume / Main menu) | PARTIAL | P6: ESC does not pause, timers keep running, game hidden, hover spam |
+| — | Ghost chase quality | TODO | Section G (BFS + fixes) |
 | 10 | Cheat mode | TODO | Section C |
-| 8 | Highscores JSON | PARTIAL | P7 (robust load, refresh, config filename) |
-| 9 | Winner / Loser / Instructions screens | PARTIAL | P9 (instructions text) |
+| 8 | Highscores JSON | PARTIAL | P7: 10 crash cases, file read every frame, config filename ignored |
+| 9 | Winner / Loser / Instructions screens | PARTIAL | P9 instructions text |
 | 1 | Config loader | PARTIAL | P10 |
 | — | No traceback / argc check | TODO | P8 |
-| 11 | Entry point, Makefile, packaging, itch.io | PARTIAL | No `pac-man.py`, `debug` uses `pudb`, `clean` incomplete |
-| 12 | Lint: flake8 + mypy strict | TODO (at end) | + `ghost.py:168` 82 chars (E501) |
+| 11 | Entry point, Makefile, packaging, itch.io | PARTIAL | no `pac-man.py`, `debug` uses `pudb`, `clean` incomplete, test values in config |
+| 12 | Lint: flake8 + mypy strict | TODO (at end) | today: flake8 **9**, mypy **55 errors / 18 files** |
 | 14 | README + `docs/project_management/` | TODO | README empty |
 
-Order of remaining work:
-**P3 + P2 → P5 → BFS chase (section B) → P6 pause → C cheat → P7 → P9 → P10 → P8 → 11 → P12 cleanup → 12 lint → 14**
+---
+
+## ROADMAP (do in this order)
+
+**Phase 0 — game-breaking, small (≈1 h)**
+1. P3 timer typo (1 line).
+2. P2 lives reset on new game.
+3. P1 keyboard dead in MENU/PAUSE (indentation of the hover `if`).
+4. P4 + P5: pacgum check inside `"PLAYING"`, put `return` back in `level_win`, delete extra `load_level()`.
+
+**Phase 1 — finish pause (task 7)**
+5. P6: ESC toggles pause, freeze ghost timers, draw game under the menu, hover only on mouse move.
+
+**Phase 2 — ghosts (section G)**
+6. BFS distance + target snapping (G2).
+7. Spawn-kill guard (E3) + global, pause-safe mode timer (G3).
+8. Optional polish: Inky classic target, staggered release, afraid = random (G4).
+
+**Phase 3 — robustness (subject: never crash)**
+9. P7 highscores loader + refresh only on enter + config filename.
+10. P10 config loader per-key defaults.
+11. P8 `__main__` argc + try/except, `run()` out of `__init__`.
+
+**Phase 4 — content**
+12. C cheat mode → 13. P9 instructions + screens polish → 14. P11-c resize all screens.
+
+**Phase 5 — delivery**
+15. Task 11 (`pac-man.py`, root `config.json`, Makefile, real config values) → 16. P12 cleanup
+→ 17. Lint → 18. README + docs + itch.io.
 
 ---
 
 ## PROBLEMS — what, where, fix
 
-### P2. Lives not reset on new game
+### P1. Keys ignored in MENU and PAUSE **(tested)** — NEW, from pause PR
+
+**Where:** `src/logic/game.py:149-154`. The new hover block was added at the wrong level:
+```python
+            if MazeEnv.state == "MENU":          # <- new `if` chain inside the event loop
+                self.main_menu.check_hovers()
+            elif MazeEnv.state == "PAUSE":
+                self.pause_menu.check_hovers()
+
+            elif event.type == pygame.KEYDOWN:   # <- now belongs to the `if state` chain!
+```
+→ KEYDOWN only handled when state is **not** MENU and **not** PAUSE.
+Test: SPACE → PAUSE, then ESC → still PAUSE, SPACE → still PAUSE. Only the mouse can leave pause.
+Also `check_hovers()` runs for **every** event (keys, resize…), re-renders every button and prints
+`"We have a hover heeeere"` / `"…noooo hover…"` (`button_widget.py:47,51`) → terminal spam.
+
+**Fix:**
+```python
+            elif event.type == pygame.MOUSEMOTION:
+                if MazeEnv.state == "MENU":
+                    self.main_menu.check_hovers()
+                elif MazeEnv.state == "PAUSE":
+                    self.pause_menu.check_hovers()
+            elif event.type == pygame.KEYDOWN:
+                self.handle_key(event)          # move the key code into its own method
+```
+`button_widget.py:44-53`: delete the 2 prints, re-render only if `is_hovered` changed:
+```python
+def check_hover(self):
+    hovered = bool(self.rect and self.rect.collidepoint(pygame.mouse.get_pos()))
+    if hovered != self.is_hovered:
+        self.is_hovered = hovered
+        self.render_button()
+```
+
+### P2. Lives not reset on new game **(tested)**
 
 **Where:** `src/logic/game_state.py:22-23` `setup()`: `if cls.lives == 0: cls.lives = config.lives`;
-`game_state.py:32` `reset_game()`: lives line commented out (`MazeEnv.config` is `None` on the very first call).
+`game_state.py:32` `reset_game()`: lives line commented out.
 
-**Bug:** lives only refill when exactly 0. ESC mid-game with 1 life → Start → new game with **1 life**.
-Win the game with 2 lives → next game starts with **2 lives**.
+**Bug:** lives refill only when exactly 0. Test: lives=1 → Main menu → Start → **1 life**.
+Win with 1 life left → next game starts with **1 life**.
 
-**Fix:** give the value to `reset_game`, keep `setup` away from lives:
+**Fix:**
 ```python
 # game_state.py
 @classmethod
@@ -62,54 +119,104 @@ def reset_game(cls, lives: int) -> None:
 GameState.reset_game(self.config.lives)
 ```
 
-### P3. Timer at 0 → all lives lost in 3 frames
+### P3. Timer at 0 → all lives lost in 3 frames **(tested)**
 
-**Where:** `src/logic/game.py:256` `self.time_left = float(self.config.level_max_time)`.
-Typo: `self.time_left` instead of `GameState.time_left` → `GameState.time_left` stays ≤ 0 → `lose_life()` every frame.
+**Where:** `src/logic/game.py:287` `self.time_left = …` → typo, must be `GameState.time_left`.
+Test: `time_left = 0.01` → 3 frames later lives 3 → 0, LOSER.
 
-**Fix:**
+**Fix:** `GameState.time_left = float(self.config.level_max_time)`. Also `game_state.py:16` `time_left: int` → `float`.
+
+### P4. `return` in `level_win` removed again (regression from `84f203c`)
+
+**Where:** `game.py:302` `# return`.
+Why it was removed: the pacgum check (`game.py:102-103`) runs in **every** state, so with `return` the empty
+pacgum dict calls `level_win()` every frame on the WINNER screen (level 3, 4, 5…). Removing `return`
+"fixes" it by building one more useless level (new maze + ghosts + pacgums) behind the WINNER screen.
+Side effect: if that extra maze fails, state is set to `"MENU"` → WINNER screen skipped, score not saved.
+
+**Fix:** with P5 (check only in PLAYING) put `return` back.
+
+### P5. Start loads level twice / pacgum check in every state **(tested: 2 `load_level` calls per Start)**
+
+**Where:** `game.py:131-134` `start_new_game()` (already calls `load_level()`) then `self.load_level()` again.
+`game.py:102-103` `if not GameState.pacgums: self.level_win()` outside the PLAYING branch.
+
+**Fix:** Start → `self.start_new_game(); MazeEnv.state = "PLAYING"`. Move the pacgum check right after
+`self.pacman.eat_pacgum()` in the `"PLAYING"` branch.
+Later (task 6 clean): `class State(Enum)` MENU, PLAYING, PAUSE, WINNER, LOSER, HIGHSCORES, INSTRUCTIONS.
+Replace all string states (game.py, input_widget.py:42, maze_env.py:13).
+
+### P6. Pause menu: what's left (task 7, subject VI.7/VI.8) **(tested)**
+
+Done in `e051b69`: `PauseMenu` (Resume / Main menu), SPACE pauses, ghosts/timer don't move while paused.
+
+| # | Problem | Where | Fix |
+|---|---------|-------|-----|
+| a | ESC in PLAYING quits to MENU (game lost), doesn't pause | `game.py:155-156` | ESC: PLAYING → PAUSE, PAUSE → PLAYING, WINNER/LOSER → MENU (skip save), others → MENU. Keep SPACE as 2nd key |
+| b | Ghost timers keep running: afraid 7 s, paused 9.6 s, resume → afraid gone | `ghost.py:14,164,176,180,189` use `get_ticks()` | see below |
+| c | Pause menu covers whole window with near-white `(250,250,250)` → game hidden | `pause_menu.py:8`, `game.py:191` | see below |
+| d | Hover spam | P1 | P1 |
+| e | Resume by click only (P1) | P1 | P1 |
+
+**b — freeze timers (simple):**
 ```python
-GameState.time_left = float(self.config.level_max_time)
+# ghost.py
+def shift_timers(self, ms: int) -> None:
+    self.afraid_until += ms
+    self.pwn_time += ms
+    self.last_mode_switch += ms
+
+# game.py — use for EVERY way in / out of pause (button, ESC, SPACE)
+def pause(self) -> None:
+    self.pause_start = pygame.time.get_ticks()
+    MazeEnv.state = "PAUSE"
+
+def resume(self) -> None:
+    paused = pygame.time.get_ticks() - self.pause_start
+    for ghost in self.ghosts:
+        ghost.shift_timers(paused)
+    MazeEnv.state = "PLAYING"
 ```
-Also `game_state.py:16` `time_left: int` → `float`.
+Cleaner (with G3): count all ghost timers in seconds with `dt`, like the level timer → pause is free.
 
-### P5. Start loads level twice / level check runs in every state
+**c — see the game under the menu:**
+```python
+# calculate_dimensions
+self.pause_menu_surface = pygame.Surface((w, h), pygame.SRCALPHA)
+# pause_menu.py
+self.bg_color = (0, 0, 0, 160)
+# run(), "PAUSE" branch: redraw the frozen game first (no move), then the overlay
+self.draw_game()                  # = the draw half of the PLAYING branch, extracted
+self.pause_menu.draw()
+self.screen.blit(self.pause_menu_surface, (0, 0))
+```
+Without `draw_game()` each frame blends black on the old frame → goes fully black in < 1 s.
 
-**Where:**
-- `game.py:120-123` click "Start": `start_new_game()` (already calls `load_level()`) then `self.load_level()` again
-  → pacgums placed twice, wasted work.
-- `game.py:93-94` `if not GameState.pacgums: self.level_win()` runs in **every** state (menu, screens...).
+### P7. Highscores **(tested: 10 crash cases)**
 
-**Fix:** click Start → `self.start_new_game(); MazeEnv.state = "PLAYING"` (delete extra `load_level()`).
-Move the pacgum check inside the `"PLAYING"` branch, right after `self.pacman.eat_pacgum()`.
+`87241d6` made the screen reload the file and survive a missing file / bad JSON. Still:
 
-Later (task 6 clean): `class State(Enum)` with MENU, PLAYING, PAUSED, WINNER, LOSER, HIGHSCORES, INSTRUCTIONS.
-Replace all string states (game.py, input_widget.py:38, maze_env.py:13).
+| Content of `highscores.json` | Screen | `save_score` |
+|---|---|---|
+| `{"a": 1}` | CRASH TypeError | CRASH AttributeError |
+| `[{"name": "x"}]` | CRASH KeyError | CRASH KeyError |
+| `[1, 2]` | CRASH TypeError | CRASH TypeError |
+| `[{"name":"x","score":"10"}]` | CRASH TypeError | CRASH TypeError |
+| `null` | CRASH TypeError | CRASH TypeError |
+| `{broken` | file **overwritten with `[]`** (scores lost) | CRASH JSONDecodeError |
+| 15 entries | shows 15 rows | ok |
 
-### P6. No pause — ESC kills the game (subject VI.7 + VI.8: pause menu mandatory)
-
-**Where:** `game.py:131-132` ESC → `"MENU"` from any state.
-
-**Fix (task 7):**
-1. ESC in PLAYING → `"PAUSED"`. ESC in PAUSED → `"PLAYING"`. ESC in other screens → `"MENU"`.
-2. New `src/graphic/screens/pause.py`: `MenuWidget` with buttons "Resume", "Main menu". Draw it over the
-   last game frame (don't call `move()` when PAUSED).
-3. Timers: ghost afraid / eaten / scatter use `pygame.time.get_ticks()` → keep running while paused.
-   Simplest: store pause start, on resume add pause duration to each ghost
-   (`afraid_until`, `pwn_time`, `last_mode_switch`). Cleaner: count with `dt` like the level timer.
-
-### P7. Highscores not robust / not refreshed
-
-**Where:**
-- `src/graphic/screens/highscores.py:17-23`: `open` + `json.load` no try → **crash at startup** if file missing or broken
-  (screen is built in `Game.__init__`).
-- Read only once in `__init__` → new score not shown until restart.
-- `src/logic/save_scores.py:8-10`: same, no try; no check each entry has `name`/`score`.
-- Filename hard-coded `"highscores.json"`, config `highscore_filename` ignored (default `"scores"`).
-- `highscores.json` committed with test names.
+Other:
+- `game.py:69` `get_file_content()` called **every frame** → open + parse + 11 new `Font` objects.
+  Measured **13 ms/frame** (785 ms / 60 frames) of a 16 ms budget → laggy screen.
+- `highscores.py:30-32` the except writes the file → `OSError` crash if dir read-only; also creates
+  `highscores.json` in the CWD just by starting the game.
+- List not sorted on display, `save_score` assumes last entry = lowest.
+- Filename hard-coded, config `highscore_filename` ignored. `highscores.json` committed with test names.
+- Name `"   "` (spaces only) accepted.
 
 **Fix:**
-1. In `save_scores.py` add one loader used by both:
+1. One loader in `save_scores.py` used by screen + save:
    ```python
    def load_scores(filename: str) -> list[dict[str, object]]:
        try:
@@ -119,20 +226,22 @@ Replace all string states (game.py, input_widget.py:38, maze_env.py:13).
            return []
        if not isinstance(data, list):
            return []
-       return [e for e in data
+       good = [e for e in data
                if isinstance(e, dict) and isinstance(e.get("name"), str)
-               and isinstance(e.get("score"), int) and e["score"] >= 0][:10]
+               and type(e.get("score")) is int and e["score"] >= 0]
+       good.sort(key=lambda e: e["score"], reverse=True)
+       return good[:10]
    ```
-   `save_score` uses it + wraps the write in `try/except OSError` (print message, no crash).
-2. `HighScoresScreen.refresh()` rebuilds `elements` + `calculate_layout()`. Call it when the menu button
-   "Highscores" is clicked. Show "No scores yet" when empty.
-3. Pass `config.highscore_filename` everywhere (add `.json` if no extension).
-4. `.gitignore` → add `highscores.json`, remove it from repo (`git rm --cached highscores.json`).
+   Never write in the loader. `save_score` writes inside `try/except OSError` (print, no crash).
+2. Screen: `refresh()` when the menu button "Highscores" is clicked, **not** in `run()`. "No scores yet" if empty.
+3. Use `config.highscore_filename` everywhere (add `.json` if no extension).
+4. `.gitignore` += `highscores.json`; `git rm --cached highscores.json`.
+5. `input_widget.py`: `name = typed_text.strip()`; ignore if empty.
 
-### P8. Tracebacks still possible (subject V.1: never a traceback)
+### P8. Tracebacks still possible (subject V.1)
 
-**Where:** `src/__main__.py:12-26` — try/except commented out. `Config` errors, maze errors, game errors → traceback.
-Also accepts 0 args (subject: exactly 1).
+**Where:** `src/__main__.py:12-26` try/except commented. Accepts 0 args (subject: exactly 1).
+`game.py:50` `run()` inside `__init__`.
 
 **Fix:**
 ```python
@@ -140,234 +249,149 @@ if len(sys.argv) != 2:
     print("Usage: python3 pac-man.py config.json", file=sys.stderr)
     sys.exit(1)
 try:
-    config = Config.from_json_file(sys.argv[1])
-    game = Game(config)
+    game = Game(Config.from_json_file(sys.argv[1]))
+    game.run()
 except KeyboardInterrupt:
     sys.exit(0)
 except Exception as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
 ```
-And move `self.run()` out of `Game.__init__` (`game.py:48`) → `game.run()` inside the try.
 
 ### P9. Instructions screen (placeholder text + broken layout)
 
-**Where:** `src/graphic/screens/instructions.py` + `src/graphic/menus/menu_widget.py` + `src/logic/game.py`.
+**Where:** `src/graphic/screens/instructions.py` (unchanged since last review).
+1. Text = "Hellooooo"… Subject VI.8: must show **controls and rules**.
+2. Layout `"HUD"` → font = 10 % of window width (~150 px) → lines off screen.
+3. l.10-13 copies score/lives/level → unused.
+4. No Back button, player not told about ESC.
 
-**Problems now:**
-1. Text = "Hellooooo", "Its meeeee", "what do you want?" (l.15-17). Subject VI.8: must show **controls and rules**.
-2. Uses layout `"HUD"` (l.8) → font = `width * 0.10` of the **whole window** (~150 px) → long lines go off screen.
-3. l.10-13 copies score/lives/level → unused, delete.
-4. No way back except ESC, and the player isn't told.
-5. Not re-laid out on window resize (`game.py:104-114` only HUD + main menu).
-
-**Target look** (dark bg, yellow titles, white text, ghost names in their colors, button at bottom):
+**Target:**
 ```
                  HOW TO PLAY
-
                   CONTROLS
           Arrows / WASD   move Pac-Man
-          ESC             pause / back
-
+          ESC / SPACE     pause
                    RULES
-          Pacgum           +10 pts
-          Super pacgum     +50 pts, ghosts turn blue (7 s)
-          Blue ghost       +200 pts, comes back after 5 s
-          Touch a ghost    lose 1 life (3 lives)
-          Eat all pacgums  next level  (10 levels)
-          Timer 90 s       time out = lose 1 life
-
+          Pacgum           +{points_per_pacgum}
+          Super pacgum     +{points_per_super_pacgum}, ghosts blue {afraid_time} s
+          Blue ghost       +{points_per_ghost}, back after {ghost_pwn_time} s
+          Touch a ghost    lose 1 life ({lives} lives)
+          Eat all pacgums  next level ({levels} levels)
+          Timer {level_max_time} s     time out = lose 1 life
                   GHOSTS
      Blinky chases you      Pinky cuts you off
-     Inky follows close     Clyde is shy when near
-
-            CHEAT MODE (press C)
-     I invincible  N skip level  F freeze ghosts
-     L +1 life     V speed x2    T +30 s
-
+     Inky ambushes          Clyde is shy when near
+            CHEAT MODE (press C)    <- only keys that really exist (section C)
                   [ Back ]
 ```
-Numbers come from **config** (reviewer will change them at defense → screen must follow).
+Numbers from **config** (reviewer changes them at defense).
 
-**Step 1 — layout for this screen** (`menu_widget.py`, in `calculate_layout`, add a branch):
+**Layout** (`menu_widget.py` `calculate_layout`):
 ```python
 elif self.menu_name == 'INSTRUCTIONS':
     menu_width, menu_height = self.surface.get_size()
-    # ~26 lines must fit: limit by height too, not only width
     dynamic_font_size = max(14, min(int(menu_width * 0.022),
                                     int(menu_height * 0.032)))
     self.gap = int(dynamic_font_size * 0.15)
 ```
+Screen = list of `TextWidget(text, color)` (`TextWidget("")` = spacer, works) + `ButtonWidget("Back")`.
+Wire: `InstructionScreen(surface, self.config)`; click "Back" in INSTRUCTIONS → MENU.
+Note: `menu_widget.py:33` gives every element `fixed_width = 30 %` → Back button OK, text ignores it.
 
-**Step 2 — the screen** (`src/graphic/screens/instructions.py`, replace all):
-```python
-from ..menus.menu_widget import MenuWidget
-from ..widgets.text_widget import TextWidget
-from ..widgets.button_widget import ButtonWidget
-
-YELLOW = (255, 220, 0)
-WHITE = (230, 230, 230)
-GREY = (150, 150, 150)
-RED = (255, 0, 0)
-PINK = (255, 184, 255)
-CYAN = (70, 191, 238)
-ORANGE = (240, 131, 0)
-
-
-class InstructionScreen(MenuWidget):
-    """Controls, rules, ghosts and cheat keys. Values read from config."""
-
-    def __init__(self, surface, config) -> None:
-        super().__init__(surface, "INSTRUCTIONS")
-        self.bg_color = (0, 0, 0)
-        self.back_button = ButtonWidget("Back")
-        c = config
-        self.elements = [
-            TextWidget("HOW TO PLAY", YELLOW),
-            TextWidget(""),
-            TextWidget("CONTROLS", YELLOW),
-            TextWidget("Arrows / WASD : move Pac-Man", WHITE),
-            TextWidget("ESC : pause / back", WHITE),
-            TextWidget(""),
-            TextWidget("RULES", YELLOW),
-            TextWidget(f"Pacgum : +{c.points_per_pacgum} pts", WHITE),
-            TextWidget(f"Super pacgum : +{c.points_per_super_pacgum} pts,"
-                       f" ghosts turn blue for {c.afraid_time} s", WHITE),
-            TextWidget(f"Blue ghost : +{c.points_per_ghost} pts,"
-                       f" back after {c.ghost_pwn_time} s", WHITE),
-            TextWidget(f"Touch a ghost : lose 1 life"
-                       f" (you have {c.lives})", WHITE),
-            TextWidget(f"Eat all pacgums : next level"
-                       f" ({c.levels} levels)", WHITE),
-            TextWidget(f"Timer {c.level_max_time} s :"
-                       f" time out = lose 1 life", WHITE),
-            TextWidget(""),
-            TextWidget("GHOSTS", YELLOW),
-            TextWidget("Blinky chases you", RED),
-            TextWidget("Pinky cuts you off", PINK),
-            TextWidget("Inky follows close behind", CYAN),
-            TextWidget("Clyde runs home when near", ORANGE),
-            TextWidget(""),
-            TextWidget("CHEAT MODE (press C)", YELLOW),
-            TextWidget("I invincible   N skip level   F freeze ghosts",
-                       GREY),
-            TextWidget("L +1 life   V speed x2   T +30 s", GREY),
-            TextWidget(""),
-            self.back_button,
-        ]
-        self.calculate_layout()
-```
-Note: `TextWidget("")` = empty line spacer (checked: pygame-ce renders `""` as 0 x font-height surface, layout works).
-Keep the cheat lines in sync with section C (only list keys that really exist).
-
-**Step 3 — wire it** (`game.py`):
-1. Build: `InstructionScreen(self.instructions_surface, self.config)`.
-2. Click in INSTRUCTIONS state (in `check_events`, MOUSEBUTTONDOWN):
-   ```python
-   elif MazeEnv.state == "INSTRUCTIONS":
-       if self.instructions_screen.check_clicks(mouse_pos) == "Back":
-           MazeEnv.state = "MENU"
-   ```
-3. Resize: add `self.instructions_screen.surface = self.window.get_surface()` +
-   `self.instructions_screen.calculate_layout()` (same for winner/loser/highscores, P11-c).
-
-**Same idea for the other screens (cheap UI wins):**
-- Main menu: add title "PAC-MAN" in yellow above the buttons (`TextWidget("PAC-MAN", YELLOW)` first element)
-  + small grey line at bottom "ESC = back / pause".
-- Highscores: title "TOP 10" yellow, rank 1 in yellow, others white, "No scores yet" if empty, "Back" button.
-- Winner / Loser: black bg like the menu, score line yellow, under the input: "Type your name + Enter"
-  (grey) so the player knows what to do (P11-e).
-- One shared colors file `src/graphic/colors.py` (YELLOW, WHITE, GREY, ghost colors) → reuse in ghost.py too.
-
-**Done when:** Instructions readable at 800x600 and full screen, numbers change when config changes,
-Back button + ESC return to menu, resize keeps it fitting.
+**Cheap UI wins:** title "PAC-MAN" on main menu; highscores title "TOP 10" + Back; winner/loser:
+"Type your name + Enter" hint; shared `src/graphic/colors.py`.
 
 ### P10. Config loader crashes on reviewer edits (task 1, subject V.3)
 
 **Where:** `src/parser/load_config.py`
-- l.13 `extra='forbid'` → unknown key crashes. Must be ignored → `extra='ignore'`.
-- l.13 `strict=True` + whole-model validate (l.58) → one bad value rejects everything. Must clamp/default + message.
-- l.29-35 `check_consistency` raises → remove (clamp pacgum at placement, already done with `min()`).
-- l.50-56 missing file / bad JSON → `ConfigError` (traceback while P8 not fixed). Choose: defaults + message.
-- `width/height` no max → huge maze = generator crash/slow. Clamp e.g. 5..40.
-- Comment lines removed → JSON error line numbers wrong. Replace comment line by `"\n"` instead of dropping.
+- l.13 `extra='forbid'` → unknown key crashes → `extra='ignore'` + message.
+- l.13 `strict=True` + whole-model validate → one bad value rejects all.
+- l.29-35 `check_consistency` → **`{"width": 5, "height": 5}` alone crashes (tested)**: default pacgum 42 > 25.
+  Delete it (placement already clamps with `min()`).
+- l.50-56 missing file / bad JSON → `ConfigError` → traceback while P8 not done.
+- No max for `width/height` → clamp 5..40 (40x40 tested OK: generator fine, BFS cheap).
+- Comment lines removed → JSON error line numbers wrong → replace by `"\n"`.
+- `afraid_time`, `ghost_pwn_time` not in subject key list → keep as optional extras, document in README.
 
-**Fix:** per-key validation loop: for each field, try validate alone; on error print
-`[config] 'lives'=-4 invalid, using default 3`, keep default. Print `[config] unknown key 'x' ignored`.
+**Fix:** per-key loop: validate each field alone; on error print
+`[config] 'lives'=-4 invalid, using default 3`; unknown key → `[config] unknown key 'x' ignored`.
 
 ### P11. Other bugs / risks
 
 | # | Where | Problem | Fix |
 |---|-------|---------|-----|
-| a | several | Debug prints left | Delete: `input_widget.py:35-39`, `highscores.py:14`, `game.py:239`, commented `game.py:52` |
-| b | `game.py:28` | `minimum_size = (1500, 1000)` > many screens / reviewer VM | `(800, 600)` |
-| c | `game.py:104-114` | Resize only re-layouts HUD + main menu. Winner/loser/highscores/instructions keep old font size; their surfaces are the old `window.get_surface()` | On resize: `self.screen = ...` and give every screen the new surface + `calculate_layout()` |
-| d | `game.py:147-150, 240-241, 269-270` | Magic indexes `elements[4]`, `elements[2]` | Keep refs: `self.input = InputWidget()`, `self.score_text = ...` in screens |
-| e | `input_widget.py:31-38` | Empty name → nothing happens, no hint; ESC leaves without saving silently | Show "Type a name + Enter". OK to keep ESC = skip |
-| f | `game.py:262` | `random.seed()` reseeds global random | Use own `self.rng = random.Random()` for level seeds |
-| g | `game_state.py:59` | Level-1 pacgums placed with unseeded random → differ each run | Optional: `random.Random(config.seed)` for level 1 |
-| h | `pacgum.py:15-17` | `MazeEnv.config` may be `None` → mypy error | `assert MazeEnv.config is not None` |
-| i | `character.py:31-32` | `self.y: int` but becomes float | type `float` |
-| j | `pacman.py:13-22` | Start fallback only tries 3 cells around center (closed `15` "42" logo cells) | BFS from center to nearest cell `!= 15` |
-| k | `pacman.py:6` | `config` param unused | remove or use for speed |
-| l | `src/setting.json` | Test values committed: `pacgum: 1`, `levels: 3` | `pacgum: 42`, `levels: 10`; add `afraid_time`, `ghost_pwn_time`; rename `config.json` at root (subject usage) |
-| m | `game.py:20-48` | `Game.__init__` calls `start_new_game()` and `run()` | `run()` out (P8) |
-| n | `character.py:55-76` | Pacman can only turn back at a cell center (feels laggy) | Optional: if `new_direction` is opposite of `direction` while moving → swap `current_cell`/`target_cell` + flip direction (same trick as ghost afraid fix) |
+| a | `button_widget.py:47,51`, `input_widget.py:39,41,43`, `game.py:270` | Debug prints | Delete |
+| b | `game.py:29` | `minimum_size = (1500, 1000)` > many screens | `(800, 600)` |
+| c | `game.py:113-125` | Resize re-layouts HUD, main menu, pause only. Winner/loser/highscores/instructions keep old font size (surface itself is fine: `Window.get_surface()` returns the same object, tested) | `calculate_layout()` on every screen |
+| d | `game.py:174,176,271,300` | Magic indexes `elements[4]`, `elements[2]` | Keep refs `self.input`, `self.score_text` in screens |
+| e | `input_widget.py` | ESC leaves typed name in the box → shows on next WINNER/LOSER | Clear `text` when entering the screen |
+| f | `game.py:293` | `random.seed()` reseeds global random; seed range only ~1300 values → same maze twice possible | `self.rng = random.Random()`; skip seed == previous |
+| g | `game_state.py:60` | Pacgum placement uses global random | `random.Random(level_seed)` |
+| h | `pacgum.py:15-17` | `MazeEnv.config` may be `None` → mypy | `assert` |
+| i | `character.py:31-32` | `self.y: int` becomes float | `float` |
+| j | `pacman.py:13-22` | Start fallback tries 3 cells only. Tested 20x20 seeds 1-30 + sizes 5..40: always OK today, but depends on generator | BFS from center to nearest cell `!= 15` |
+| k | `pacman.py:6` | `config` unused | remove |
+| l | `src/setting.json` | Test values: `levels: 1`, `pacgum: 1` | `levels: 10`, `pacgum: 42`; root `config.json` |
+| m | `game.py` | Movement per frame, not `dt` → slower game if FPS drops (timer uses `dt` → inconsistent) | Optional: `speed * dt * 60` |
+| n | `character.py:55-76` | Pacman turns back only at cell center (laggy) | Opposite key while moving → swap `current_cell`/`target_cell` |
+| o | `character.py:83-93` | `is_valid_direction` trusts wall bits only, no bounds check | Add bounds check (cheap safety) |
 
 ### P12. Dead files / cleanup
 
-- `src/logic/rules.py` — only `from .game import Game` → circular import risk. Delete.
-- `src/graphic/screens/test.py` — test script, runs code at import. Delete.
-- `src/logic/ghosts_move.py` — empty. Delete (or put BFS here, section B).
-- `main.py` — `uv init` stub. Replace by `pac-man.py` (task 11).
-- `pacgum.py:38-69` — old commented `Pacgums` class. Delete.
-- `character.py:8-27`, `maze_env.py:28-34`, `pacman.py:8-11`, `game.py:8,133-137` — commented code. Delete.
-- `game.py:248-250` `start_evil()` and `278-280` `end_game()` — empty. Delete.
+- `src/logic/rules.py` (circular import risk), `src/graphic/screens/test.py` (runs at import, flake8 W291),
+  `src/logic/ghosts_move.py` (empty → or put BFS here), `main.py` (uv stub) → delete.
+- `pacgum.py:38-69`, `character.py:8-27`, `maze_env.py:28-34`, `pacman.py:8-11`, `game.py:9,48,54,147-148,157-161,185-186`,
+  `input_widget.py:44-47`, `highscores.py:12-15`, `winner.py:10` → commented code, delete.
+- `game.py:279-281` `start_evil()`, `309-311` `end_game()` → empty, delete.
+- Root `setting.json` (untracked) duplicates `src/setting.json` → keep one.
 
 ---
 
-## A. How ghosts chase Pac-Man today (`ghost.py`)
+## G. Ghost AI — what it does, what's wrong, how it should be
 
-Every time a ghost reaches a cell center (`get_target_cell` → `next_direction`, l.82-129):
+### G1. Today (`ghost.py:82-129`)
+At each cell center: pick target (Blinky = Pac cell, Pinky = 4 ahead, Inky = 2 ahead, Clyde = Pac if
+> 8 cells else corner; scatter = own corner; afraid = flee Pac) → list open directions except U-turn →
+take the one with smallest **straight-line** distance² to target.
 
-1. **Pick a target cell** by mode:
+**Measured today** (headless, real `Ghost` classes, 20x20 non-perfect, seeds 1-30, 2 min limit, 60 fps):
 
-   | Mode | Target |
-   |------|--------|
-   | Chase (20 s) | Blinky (red) = Pacman cell. Pinky (pink) = 4 cells ahead of Pacman. Inky (cyan) = 2 cells ahead. Clyde (orange) = Pacman if far (> 8 cells), else his corner |
-   | Scatter (5 s) | own corner |
-   | Afraid | Pacman cell, distance negated → picks the move **farthest** from Pacman |
-   | Eaten | invisible, no move; after `ghost_pwn_time` s → reset to corner |
+| Scenario | Greedy (now) | BFS (G2) |
+|---|---|---|
+| Blinky alone, Pac still | caught **18/30**, avg 13.9 s, max 30.6 s | **30/30**, avg 8.0 s, max 10.3 s |
+| 4 ghosts, Pac still | 29/30, avg 13.0 s, **max 83.5 s** | 30/30, avg 6.6 s, max 7.9 s |
+| 4 ghosts, Pac random walk | 30/30, avg 10.4 s, max 21.5 s | 30/30, avg 8.0 s, max 13.6 s |
 
-2. **List open directions** (no wall bit) except U-turn.
-3. **Greedy choice**: for each, next cell → straight-line distance² to target → take smallest.
+Greedy loops around wall blocks (crow-flies ignores walls). 4 ghosts hide it; one ghost shows it.
 
-**Weak points:**
-- Straight-line distance ignores walls. Ghost goes toward Pacman "as the crow flies" → in dead ends / U-shapes
-  it loops around a block and never reaches Pacman. Non-perfect maze helps but not always.
-- 4 ghosts often follow the same path (all greedy on nearly same cell).
-- **Measured (2026-11-18, headless, 30 mazes 20x20 seeds 1-30, Pacman standing still at center, chase only):**
-  greedy Blinky reached Pacman in **10/30** mazes within 2 min (avg 15.0 s). Other 20: loops forever.
-  Same test with BFS (section B): **30/30**, avg 8.8 s, max 13.8 s.
-- Modes timed with `get_ticks()` → keep running in pause (P6).
-
-## B. Better chase: BFS distance (recommended, ~25 lines)
-
-Keep the same structure, only change **how distance is measured**: real path length through corridors.
-
+### G2. Fix: BFS distance + target snapping (~35 lines, put in `src/logic/ghosts_move.py`)
 ```python
 from collections import deque
 
 WALLS = [(1, -1, 0), (2, 0, 1), (4, 1, 0), (8, 0, -1)]   # bit, dy, dx (N, E, S, W)
 
+
+def snap_target(maze: list[list[int]],
+                target: tuple[int, int]) -> tuple[int, int]:
+    """Clamp into the maze; if closed (15, "42" logo) take nearest open cell."""
+    rows, cols = len(maze), len(maze[0])
+    y = min(max(target[0], 0), rows - 1)
+    x = min(max(target[1], 0), cols - 1)
+    if maze[y][x] != 15:
+        return (y, x)
+    return min(((r, c) for r in range(rows) for c in range(cols)
+                if maze[r][c] != 15),
+               key=lambda cell: abs(cell[0] - y) + abs(cell[1] - x))
+
+
 def bfs_distances(maze: list[list[int]],
                   start: tuple[int, int]) -> dict[tuple[int, int], int]:
-    """Path length from start to every reachable cell."""
+    """Real path length (through corridors) from start to every cell."""
     rows, cols = len(maze), len(maze[0])
-    y0 = min(max(start[0], 0), rows - 1)       # Pinky/Inky targets can be outside maze
-    x0 = min(max(start[1], 0), cols - 1)
-    dist = {(y0, x0): 0}
-    queue = deque([(y0, x0)])
+    start = snap_target(maze, start)
+    dist = {start: 0}
+    queue = deque([start])
     while queue:
         y, x = queue.popleft()
         for bit, dy, dx in WALLS:
@@ -378,123 +402,137 @@ def bfs_distances(maze: list[list[int]],
                 queue.append((ny, nx))
     return dist
 ```
-In `next_direction()`:
-```python
-dist_map = bfs_distances(MazeEnv.maze, (target_y, target_x))
-...
-d_val = dist_map.get((test_y, test_x), 10_000)     # unreachable (e.g. "42" cell) = far
-if self.is_afraid:
-    d_val = -d_val                                  # run away = maximize path length
-```
-Cost: 20x20 = 400 cells, run only at cell centers → nothing for pygame.
-Defense explanation: "each ghost targets a cell (personality), then takes the corridor with the shortest real path."
+In `next_direction()`: `dist_map = bfs_distances(MazeEnv.maze, (target_y, target_x))`, then
+`d_val = dist_map.get((test_y, test_x), 10_000)`; afraid → `-d_val`.
 
-Optional variety: afraid ghosts pick a **random** open direction (classic behavior, easier to catch).
+**Why snapping matters (edge case, not in the old plan):** Pinky/Inky targets often land **outside** the maze
+or **inside the "42" logo**. A closed cell has 4 walls → BFS from it reaches nothing → every neighbor = 10 000
+→ tie → ghost always takes the first direction in the list (dumb, looks random). Snapping fixes it.
 
-## C. Cheat mode (task 10, subject VI.5 — must really help the reviewer)
+Cost: 400 cells (20x20), 1 600 (40x40), only at cell centers → negligible. Optional: cache per
+`(target, frame)` so Blinky + Clyde share one BFS.
+Defense line: *"Each ghost picks a target cell (its personality), then follows the shortest real path."*
 
-**Where:** `game.py` `check_events()` (PLAYING branch), `game_state.py`, `hud_menu.py`, `ghost.py`.
+### G3. Timers and fairness
+- **Spawn kill (tested):** eaten ghost respawns in its corner after `ghost_pwn_time` even if Pac stands there
+  → instant life lost (lives 3 → 2 in test). Super pacgums **are** in the corners → common case.
+  Fix: in `Ghost.move()` eaten branch, respawn only if Pac is ≥ 3 cells away (BFS or Manhattan), else wait.
+- **Per-ghost mode clock:** each ghost has its own `last_mode_switch` → after one ghost is eaten/reset,
+  ghosts are out of sync (one scatters, others chase). Classic: one global clock in `Game`
+  (scatter 7 → chase 20 → scatter 7 → chase 20 → scatter 5 → chase forever), counted with `dt`
+  (pause-safe, replaces P6-b). On each switch every ghost reverses (visible signal to the player).
+- **Start fairness:** all 4 ghosts leave at t=0 from the corners. Optional staggered release:
+  Blinky 0 s, Pinky 2 s, Inky 4 s, Clyde 6 s.
 
-| Key | Effect | How |
-|-----|--------|-----|
-| `C` | Toggle cheat mode ON/OFF | `GameState.cheat_mode = not ...`; HUD shows "CHEAT ON". Other cheat keys work only when ON |
-| `I` | Invincible | Already used: `check_ghost_collision` skips `lose_life()` if `cheat_mode` (l.231). Make it its own flag `GameState.invincible` |
-| `N` | Skip level | `GameState.pacgums.clear()` → normal `level_win()` path runs |
-| `F` | Freeze ghosts | `GameState.ghosts_frozen = not ...`; in `run()` skip `ghost.move()` when frozen |
-| `L` | +1 life | `GameState.lives += 1` |
-| `V` | Pacman speed x2 toggle | `self.pacman.speed = 0.2 / 0.1` (keep values that divide 1.0 cleanly: 0.1, 0.2, 0.25, 0.5) |
-| `T` | +30 s timer | `GameState.time_left += 30` |
-
-Also: timer `T` + skip `N` let reviewer test WINNER screen in seconds; `L` + invincible test LOSER with `lives` config.
-`reset_game()` already turns cheat off (l.33) — also reset the new flags there.
-List all keys on the Instructions screen + README.
+### G4. Optional polish (if time)
+- **Inky classic:** `p2 = 2 cells ahead of Pac`; `target = (2*p2y - blinky.y, 2*p2x - blinky.x)` (pass Blinky
+  in constructor). Needs G2 snapping (target often outside maze).
+- **Clyde:** use BFS distance (path) instead of crow-flies for the "> 8" test.
+- **Afraid:** random open direction at each intersection (classic, easier to catch) instead of perfect flee;
+  with BFS flee, ghosts are very hard to catch on big mazes.
+- **Speed by level:** ghost `0.05` (half of Pac) is easy. E.g. `0.05 + 0.005 * (level-1)` capped `0.08`.
+  Overshoot is safe (`align_with_target` snaps), `round(…, 2)` keeps it stable.
+- Tie-break order UP, LEFT, DOWN, RIGHT (classic, deterministic).
 
 ---
 
-## D. How the game works now (origin/main)
+## C. Cheat mode (task 10, subject VI.5 — must really help the reviewer)
+
+**Where:** `game.py` key handler (PLAYING), `game_state.py`, `hud_menu.py`, `ghost.py`.
+
+| Key | Effect | How |
+|-----|--------|-----|
+| `C` | Toggle cheat ON/OFF | `GameState.cheat_mode`; HUD "CHEAT ON". Other keys only when ON |
+| `I` | Invincible | `GameState.invincible` (collision code already skips `lose_life` on `cheat_mode`, `game.py:262`) |
+| `N` | Skip level | `GameState.pacgums.clear()` → normal `level_win()` (needs P4/P5 first) |
+| `F` | Freeze ghosts | `GameState.ghosts_frozen`; skip `ghost.move()` |
+| `L` | +1 life | `GameState.lives += 1` |
+| `V` | Pac speed x2 | `0.1 ↔ 0.2` (values dividing 1.0) |
+| `T` | +30 s | `GameState.time_left += 30` |
+
+`reset_game()` resets every flag. List keys on Instructions + README.
+
+---
+
+## E. Edge cases found (2026-11-20)
+
+| # | Case | Result now | Where fixed |
+|---|------|-----------|-------------|
+| E1 | Timer hits 0 | all lives lost in 3 frames | P3 |
+| E2 | Main menu mid-game → Start | keeps old lives | P2 |
+| E3 | Pac on a corner when eaten ghost respawns | instant death | G3 |
+| E4 | Afraid ghost + pause > afraid_time | afraid gone on resume | P6-b |
+| E5 | ESC / SPACE in PAUSE | ignored | P1 |
+| E6 | Highscores file = `{}`, `null`, `[1]`, missing `score`, string score | crash | P7 |
+| E7 | Highscores file = broken JSON | silently replaced by `[]` | P7 |
+| E8 | Read-only directory | crash at startup (screen writes file) | P7 |
+| E9 | Config `width=5,height=5` only | crash (pacgum 42 > 25) | P10 |
+| E10 | Config unknown key / wrong type / comment line shift | crash / wrong line | P10 |
+| E11 | 0 args / 2 args | runs with defaults / ignores extra | P8 |
+| E12 | WINNER and extra level maze fails | WINNER screen skipped | P4 |
+| E13 | Pinky/Inky target outside maze or in "42" | ghost moves dumb (with BFS) | G2 snap |
+| E14 | Name of spaces only | saved as blank | P7-5 |
+| E15 | ESC on WINNER/LOSER after typing | text stays for next time | P11-e |
+| E16 | Window resize on Instructions/Highscores/Winner | old font size | P11-c |
+| E17 | Window drag / slow PC | big `dt` jump → timer drops, movement doesn't | P11-m |
+| E18 | Maze < 9x7 | generator prints "too small to add '42'" (fine, no crash, tested 5x5) | — (mention in README) |
+| E19 | Highscores screen open | 13 ms/frame file I/O + fonts | P7-2 |
+
+Checked OK (no action): all non-15 cells reachable from Pac start (20x20 seeds 1-30, sizes 5..40);
+no ghost through walls after super pacgum; collision can't be skipped at current speeds (max 0.15 cell/frame
+vs 0.5 hit box); resized window surface stays valid.
+
+---
+
+## D. How the game works now (main @ `425d435`)
 
 ```
 make run → uv run -m src src/setting.json
-   │
    ├─ src/__main__.py       Config.from_json_file(path) → Game(config)
-   │
    └─ Game.__init__  (src/logic/game.py)
-        ├─ new_maze(config.seed)     MazeGenerator(size, seed, perfect=False).maze  (wheel package)
-        ├─ pygame window: HUD left 30%, maze right 70%, cellsize fits
-        ├─ build screens: MainMenu, Instructions, Winner, Loser, HighScores
-        ├─ start_new_game()  → load_level() + GameState.reset_game()
-        └─ run()             loop 60 fps, dispatch on MazeEnv.state (starts "MENU")
+        ├─ new_maze(config.seed)   MazeGenerator(size, seed, perfect=False).maze (wheel)
+        ├─ window: HUD left 30 %, maze right 70 %
+        ├─ screens: MainMenu, Instructions, Winner, Loser, HighScores, PauseMenu
+        ├─ start_new_game() → reset_game() + new_maze + load_level()
+        └─ run()  60 fps, dispatch on MazeEnv.state (starts "MENU")
 
-Shared state (class attributes, no instances):
-   MazeEnv     maze, surface, offsets, cellsize, config, state   (src/logic/maze_env.py)
-   GameState   pacman, ghosts, pacgums, score, lives, level, time_left, cheat_mode  (src/logic/game_state.py)
+States: MENU · PLAYING · PAUSE · WINNER · LOSER · HIGHSCORES · INSTRUCTIONS  (strings)
+   PLAYING --SPACE--> PAUSE --Resume--> PLAYING      PAUSE --Main menu--> MENU
+   any --ESC--> MENU (except PAUSE: broken, P1)
 
-load_level(): MazeEnv.setup → Pacman (center) + 4 ghosts (corners) → GameState.setup
-              → set_pacgums (4 super in corners + N random) → time_left = level_max_time
+Shared state (class attributes):
+   MazeEnv   maze, surface, offsets, cellsize, config, state
+   GameState pacman, ghosts, pacgums, score, lives, level, time_left, cheat_mode
 
-Frame in "PLAYING":
-   check_events → pacman.move → pacman.eat_pacgum (+score, super → ghosts afraid)
-   → ghosts move (AI section A) → check_ghost_collision → update_timer → HUD → draw all
-
-Rules:
-   gum +10 | super +50 + afraid (afraid_time s) | afraid ghost +200, respawn after ghost_pwn_time s
-   normal ghost → -1 life, everyone back to start | timer 0 → -1 life, timer reset
-   no gums left → level_win: level+1, new maze (random seed), same score
-   level > levels → "WINNER" screen | lives 0 → "LOSER" screen
-   Winner/Loser: type name (≤10, alnum + space) + Enter → save_score (top 10) → "MENU"
-
-Maze cell = int, bit = wall: 1 N, 2 E, 4 S, 8 W, 15 = closed ("42" logo)
-```
-
-Module map:
-```
-src/
-├─ __main__.py
-├─ setting.json                  test values inside (P11-l)
-├─ parser/load_config.py         Config (pydantic)
-├─ logic/
-│   ├─ game.py                   loop, events, levels, collisions, timer
-│   ├─ game_state.py             score/lives/level/pacgums (shared)
-│   ├─ maze_env.py               maze/surface/config/state (shared)
-│   ├─ save_scores.py            top-10 JSON save
-│   ├─ rules.py, ghosts_move.py  dead (P12)
-└─ graphic/
-    ├─ maze_graphic.py
-    ├─ characters/  init.py (enums), character.py, pacman.py, ghost.py
-    ├─ pacgums/pacgum.py
-    ├─ menus/       menu_widget.py, main_menu.py, hud_menu.py
-    ├─ screens/     winner.py, loser.py, highscores.py, instructions.py, test.py (dead)
-    └─ widgets/     text_widget.py, button_widget.py, input_widget.py
-
-To add: screens/pause.py, pac-man.py, config.json (root), docs/project_management/, README content
+Frame in PLAYING: events → pacman.move → eat_pacgum → ghosts move → collision → timer → HUD → draw
+Rules: gum +10 | super +50 + afraid | blue ghost +200, back after ghost_pwn_time
+       ghost → -1 life, all reset | timer 0 → -1 life | no gums → next level (random seed)
+       level > levels → WINNER | lives 0 → LOSER | name + Enter → top-10 JSON → MENU
+Maze cell bits: 1 N, 2 E, 4 S, 8 W, 15 = closed ("42")
 ```
 
 ---
 
 ## Final checklist before defense
 
-- [ ] `python3 pac-man.py config.json` works; 0 args / 2 args → usage message
-- [ ] Config with comment, unknown key, `"lives": -4`, `"width": "abc"`, missing file → starts, message, no traceback
-- [ ] Generator error → clean message
-- [ ] Menu → play → win/lose → name → menu, many times without restart
-- [ ] Lives + score kept between levels; ≥ 10 levels default
-- [ ] Pause (Resume / Main menu); afraid timer does not run out during pause
-- [ ] Ghost never crosses walls (eat super gum mid-chase many times)
-- [ ] Highscores: delete file / write garbage in it → no crash, list refreshes after a game
-- [ ] Cheat keys documented in Instructions + README
+- [ ] `python3 pac-man.py config.json` works; 0 / 2 args → usage message
+- [ ] Config with comment, unknown key, `"lives": -4`, `"width": "abc"`, 5x5, missing file → starts, message, no traceback
+- [ ] Menu → play → win/lose → name → menu, many times, lives always full on new game
+- [ ] Lives + score kept between levels; ≥ 10 levels by default
+- [ ] Pause with ESC and SPACE, game visible behind; afraid timer frozen during pause
+- [ ] Ghosts reach a still Pac in every maze (BFS); no spawn kill
+- [ ] Highscores: delete file / garbage / `{}` → no crash, list refreshes after a game
+- [ ] Cheat keys work and are in Instructions + README
 - [ ] `make lint` clean (flake8 + mypy strict)
 - [ ] README + docs/project_management + itch.io link
 
 ---
 
-## DONE log (removed from problems list)
+## DONE log
 
 | Date | Commit | What |
 |------|--------|------|
-| 2026-11-18 | `84f203c` | Ghost went into walls after super gum → `afraid_of` swaps `current_cell`/`target_cell` |
-| 2026-11-18 | `84f203c` | WINNER: `return` restored in `level_win`, no extra level built |
-| 2026-11-18 | `84f203c` | `start_new_game`: `reset_game()` now before `load_level()` |
-| 2026-11-18 | `84f203c` | Lives no longer reset every level (but see P2) |
-| 2026-11-18 | `84f203c` | `print("State: ...")` every frame removed |
-| ≤ `9f69bc7` | | Level 1 = `config.seed`, `level = 1`, maze `None` → RuntimeError, `dt` reset per level, seed range never crashes |
-| ≤ `9f69bc7` | | Mazegenerator installed as wheel (folder removed), Winner/Loser screens + name input + top-10 save, Start/Highscores/Instructions/Exit buttons |
+| 2026-11-20 | `e051b69` | Pause menu screen (Resume / Main menu), SPACE pauses, nothing moves while paused, pause re-laid out on resize |
+| 2026-11-18 | `87241d6` | Highscores screen reloads the file, survives missing file / broken JSON; button hover color |
+| 2026-11-18 | `84f203c` | Ghost into walls after super gum fixed (swap cells); `reset_game()` before `load_level()`; lives kept between levels; per-frame state print removed |
+| ≤ `9f69bc7` | | Level 1 = `config.seed`; maze `None` → RuntimeError; `dt` reset per level; mazegenerator wheel; Winner/Loser + name input + top-10 save; menu buttons |
